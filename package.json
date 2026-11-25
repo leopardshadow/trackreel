@@ -8,6 +8,7 @@
     "trackreel": "./src/render.mjs"
   },
   "scripts": {
+    "test": "node --test",
     "sample": "node scripts/fetch-sample-gpx.mjs",
     "render": "node src/render.mjs sample/qixingshan.gpx --out dist --title \"Qixingshan Main & East Peak Traverse\""
   },

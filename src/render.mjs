@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { XMLParser } from 'fast-xml-parser';
 import * as turf from '@turf/turf';
 import { chromium } from 'playwright-core';
@@ -621,7 +621,22 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+export {
+  parseArgs,
+  computeAutoDuration,
+  escapeHtml,
+  escapeInlineJson,
+  parseGpx,
+  buildTrackData,
+  buildCameraTimeline
+};
+
+const isDirectRun =
+  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
