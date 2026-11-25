@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>trackreel 3D Renderer</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/three@0.149.0/build/three.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #0b0f17;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    }
+    #map {
+      width: 100vw;
+      height: 100vh;
+    }
+    .maplibregl-ctrl-logo,
+    .maplibregl-ctrl-attrib {
+      display: none !important;
+    }
+    .hud-top {
+      position: fixed;
+      top: 20px;
+      left: 24px;
+      z-index: 10;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      text-shadow: 0 2px 12px rgba(0, 0, 0, 0.85);
+    }
+    .hud-title {
+      font-size: 22px;
+      font-weight: 800;
+      color: #ffffff;
+      letter-spacing: -0.01em;
+    }
+    .hud-bottom {
+      position: fixed;
+      left: 24px;
+      right: 24px;
+      bottom: 20px;
+      z-index: 10;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .hud-stats {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .hud-pill {
+      background: rgba(11, 15, 23, 0.72);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 10px;
+      padding: 6px 12px;
+      display: flex;
+      flex-direction: column;
+      min-width: 96px;
+    }
+    .hud-pill-label {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.65);
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .hud-pill-value {
+      font-size: 18px;
+      font-weight: 800;
+      color: #ffffff;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.2;
+    }
+    .hud-pill-unit {
+      font-size: 11px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.7);
+      margin-left: 3px;
+    }
+    .hud-progress-track {
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.22);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .hud-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #ff8a00, #fc4c02);
+      border-radius: 999px;
+    }
+    .hud-hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="hudTop" class="hud-top">
+    <div id="hudTitle" class="hud-title"></div>
+  </div>
+
+  <div id="hudBottom" class="hud-bottom">
+    <div class="hud-stats">
+      <div class="hud-pill">
+        <span class="hud-pill-label">Distance</span>
+        <span class="hud-pill-value"><span id="hudDist">0.00</span><span class="hud-pill-unit">km</span></span>
+      </div>
+      <div class="hud-pill">
+        <span class="hud-pill-label">Elevation</span>
+        <span class="hud-pill-value"><span id="hudEle">0</span><span class="hud-pill-unit">m</span></span>
+      </div>
+    </div>
+    <div class="hud-progress-track">
+      <div id="hudProgress" class="hud-progress-fill"></div>
+    </div>
+  </div>
+
+  <script>
+    let map = null;
+    let tubeState = null;
+
+    function waitRaf(count = 2) {
+      return new Promise((resolve) => {
+        let n = 0;
+        function step() {
+          n++;
+          if (n >= count) resolve();
+          else requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+      });
+    }
+
+    function waitForIdle(timeoutMs = 3000) {
+      return new Promise((resolve) => {
+        if (!map) return resolve();
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          map.off('idle', onIdle);
+          map.off('render', onRender);
+          resolve();
+        };
+        const onIdle = () => finish();
+        const onRender = () => {
+          if (map.areTilesLoaded()) finish();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        map.on('idle', onIdle);
+        map.on('render', onRender);
+      });
+    }
+
+    function buildThreeTrackLayer(fullCoords, exaggeration) {
+      const origin = fullCoords[0];
+      const originMc = maplibregl.MercatorCoordinate.fromLngLat(origin, 0);
+      const meterScale = originMc.meterInMercatorCoordinateUnits();
+
+      // Query MapLibre terrain elevation along the route so the 3D tube hugs the exact 3D mesh
+      const hoverMeters = 18;
+      const rawEles = fullCoords.map((c) => {
+        const e = map.queryTerrainElevation(c, { exaggerated: true });
+        return typeof e === 'number' && Number.isFinite(e) ? e : null;
+      });
+
+      // Fill any missing elevation queries by forward-filling from nearest valid sample
+      let lastValid = rawEles.find((v) => v !== null) ?? 0;
+      for (let i = 0; i < rawEles.length; i++) {
+        if (rawEles[i] === null) rawEles[i] = lastValid;
+        else lastValid = rawEles[i];
+      }
+
+      // Smooth elevations slightly so the floating 3D tube looks sleek and sculptural
+      const smoothEles = rawEles.map((_, i) => {
+        let sum = 0, cnt = 0;
+        for (let j = Math.max(0, i - 3); j <= Math.min(rawEles.length - 1, i + 3); j++) {
+          sum += rawEles[j];
+          cnt++;
+        }
+        return sum / cnt;
+      });
+
+      const localPoints = fullCoords.map((c, i) => {
+        const alt = smoothEles[i] + hoverMeters;
+        const mc = maplibregl.MercatorCoordinate.fromLngLat(c, alt);
+        return new THREE.Vector3(
+          (mc.x - originMc.x) / meterScale,
+          (mc.y - originMc.y) / meterScale,
+          (mc.z - originMc.z) / meterScale
+        );
+      });
+
+      const curve = new THREE.CatmullRomCurve3(localPoints);
+      const tubularSegments = 480;
+      const radialSegments = 12;
+
+      // Model matrix: local meters -> MapLibre Mercator world space
+      const modelMatrix = new THREE.Matrix4()
+        .makeTranslation(originMc.x, originMc.y, originMc.z)
+        .scale(new THREE.Vector3(meterScale, meterScale, meterScale));
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.Camera();
+
+      // Lighting for crisp 3D cylinder shading
+      const ambient = new THREE.AmbientLight(0xffffff, 0.72);
+      scene.add(ambient);
+      const sun = new THREE.DirectionalLight(0xfff4e6, 0.75);
+      sun.position.set(1, -1, 2).normalize();
+      scene.add(sun);
+
+      // 1. Subtle translucent white guide tube for full route ahead
+      const guideGeo = new THREE.TubeGeometry(curve, 240, 4.2, 8, false);
+      const guideMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.3
+      });
+      const guideMesh = new THREE.Mesh(guideGeo, guideMat);
+      scene.add(guideMesh);
+
+      // 2. Active Strava-orange 3D tube (grown via setDrawRange, zero rebuilds!)
+      const activeGeo = new THREE.TubeGeometry(curve, tubularSegments, 8.5, radialSegments, false);
+      const activeMat = new THREE.MeshStandardMaterial({
+        color: 0xfc4c02,
+        emissive: 0xd93800,
+        emissiveIntensity: 0.55,
+        roughness: 0.35,
+        metalness: 0.05
+      });
+      const activeMesh = new THREE.Mesh(activeGeo, activeMat);
+      const totalIndices = activeGeo.index.count;
+      const indicesPerSegment = radialSegments * 6;
+      activeGeo.setDrawRange(0, indicesPerSegment);
+      scene.add(activeMesh);
+
+      // 3. Start (green) & End (red) 3D spheres
+      const pinGeo = new THREE.SphereGeometry(13, 16, 16);
+      const startPin = new THREE.Mesh(
+        pinGeo,
+        new THREE.MeshBasicMaterial({ color: 0x22c55e })
+      );
+      startPin.position.copy(localPoints[0]);
+      scene.add(startPin);
+
+      const endPin = new THREE.Mesh(
+        pinGeo,
+        new THREE.MeshBasicMaterial({ color: 0xef4444 })
+      );
+      endPin.position.copy(localPoints[localPoints.length - 1]);
+      scene.add(endPin);
+
+      // 4. Moving glowing white-core + orange-halo head sphere
+      const headGroup = new THREE.Group();
+      const headCore = new THREE.Mesh(
+        new THREE.SphereGeometry(13.5, 16, 16),
+        new THREE.MeshBasicMaterial({ color: 0xffffff })
+      );
+      const headHalo = new THREE.Mesh(
+        new THREE.SphereGeometry(21, 16, 16),
+        new THREE.MeshBasicMaterial({
+          color: 0xfc4c02,
+          transparent: true,
+          opacity: 0.45
+        })
+      );
+      headGroup.add(headCore);
+      headGroup.add(headHalo);
+      headGroup.position.copy(localPoints[0]);
+      scene.add(headGroup);
+
+      tubeState = {
+        curve,
+        activeGeo,
+        totalIndices,
+        indicesPerSegment,
+        headGroup
+      };
+
+      let renderer = null;
+      return {
+        id: 'three-3d-track',
+        type: 'custom',
+        renderingMode: '3d',
+        onAdd(mapInstance, gl) {
+          renderer = new THREE.WebGLRenderer({
+            canvas: mapInstance.getCanvas(),
+            context: gl,
+            antialias: true
+          });
+          renderer.autoClear = false;
+        },
+        render(gl, args) {
+          const rawMatrix = args?.defaultProjectionData?.mainMatrix ?? args;
+          const m = new THREE.Matrix4().fromArray(rawMatrix);
+          camera.projectionMatrix = m.multiply(modelMatrix);
+          renderer.resetState();
+          renderer.render(scene, camera);
+        }
+      };
+    }
+
+    function setTrackProgress(p) {
+      if (!tubeState) return;
+      const clamped = Math.max(0.002, Math.min(1, p));
+      const segmentsCount = Math.max(
+        1,
+        Math.round((tubeState.totalIndices / tubeState.indicesPerSegment) * clamped)
+      );
+      tubeState.activeGeo.setDrawRange(0, segmentsCount * tubeState.indicesPerSegment);
+      const headPos = tubeState.curve.getPointAt(clamped);
+      tubeState.headGroup.position.copy(headPos);
+      map.triggerRepaint();
+    }
+
+    window.initMap = async function initMap(config) {
+      document.getElementById('hudTitle').textContent = config.title || '3D Track Flyover';
+
+      const style = {
+        version: 8,
+        sources: {
+          satellite: {
+            type: 'raster',
+            tiles: [
+              'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+            ],
+            tileSize: 256,
+            maxzoom: 17
+          },
+          terrainDem: {
+            type: 'raster-dem',
+            tiles: [
+              'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'
+            ],
+            encoding: 'terrarium',
+            tileSize: 256,
+            maxzoom: 14
+          }
+        },
+        layers: [
+          {
+            id: 'satellite-layer',
+            type: 'raster',
+            source: 'satellite',
+            paint: {
+              'raster-saturation': 0.14,
+              'raster-contrast': 0.1
+            }
+          }
+        ],
+        terrain: {
+          source: 'terrainDem',
+          exaggeration: config.exaggeration ?? 1.4
+        },
+        sky: {
+          'sky-color': '#1d3557',
+          'sky-horizon-blend': 0.55,
+          'horizon-color': '#9fb6cc',
+          'horizon-fog-blend': 0.45,
+          'fog-color': '#b8c7d9',
+          'fog-ground-blend': 0.25
+        }
+      };
+
+      map = new maplibregl.Map({
+        container: 'map',
+        style,
+        center: config.initialCamera.center,
+        zoom: config.initialCamera.zoom,
+        pitch: config.initialCamera.pitch,
+        bearing: config.initialCamera.bearing,
+        maxPitch: 82,
+        interactive: false,
+        fadeDuration: 0,
+        preserveDrawingBuffer: true
+      });
+
+      await new Promise((resolve, reject) => {
+        map.on('load', resolve);
+        map.on('error', (e) => console.warn('MapLibre warning:', e?.error?.message || e));
+        setTimeout(() => reject(new Error('Map load timeout')), 30000);
+      });
+
+      // Fit full route once to warm up DEM tiles so queryTerrainElevation returns accurate heights
+      const lons = config.fullCoords.map((c) => c[0]);
+      const lats = config.fullCoords.map((c) => c[1]);
+      map.fitBounds(
+        [
+          [Math.min(...lons), Math.min(...lats)],
+          [Math.max(...lons), Math.max(...lats)]
+        ],
+        { padding: 60, animate: false }
+      );
+      await waitForIdle(12000);
+      await waitRaf(3);
+
+      // Build and attach Three.js 3D tube custom layer
+      const threeLayer = buildThreeTrackLayer(config.fullCoords, config.exaggeration ?? 1.4);
+      map.addLayer(threeLayer);
+
+      // Move to initial camera
+      map.jumpTo({
+        center: config.initialCamera.center,
+        zoom: config.initialCamera.zoom,
+        pitch: config.initialCamera.pitch,
+        bearing: config.initialCamera.bearing
+      });
+      await waitForIdle(10000);
+      await waitRaf(2);
+      return true;
+    };
+
+    window.renderFrame = async function renderFrame(frame) {
+      document.getElementById('hudTop').classList.toggle('hud-hidden', Boolean(frame.hideHud));
+      document.getElementById('hudBottom').classList.toggle('hud-hidden', Boolean(frame.hideHud));
+
+      if (!frame.hideHud) {
+        document.getElementById('hudDist').textContent = frame.distKm.toFixed(2);
+        document.getElementById('hudEle').textContent = Math.round(frame.eleM).toString();
+        document.getElementById('hudProgress').style.width = `${(frame.progress * 100).toFixed(2)}%`;
+      }
+
+      setTrackProgress(frame.progress);
+
+      map.jumpTo({
+        center: frame.camera.center,
+        zoom: frame.camera.zoom,
+        pitch: frame.camera.pitch,
+        bearing: frame.camera.bearing
+      });
+
+      await waitForIdle(frame.idleTimeoutMs ?? 1200);
+      return true;
+    };
+
+    window.renderOverview = async function renderOverview(bounds, bearing = -25, pitch = 58) {
+      document.getElementById('hudTop').classList.add('hud-hidden');
+      document.getElementById('hudBottom').classList.add('hud-hidden');
+
+      setTrackProgress(1);
+
+      map.fitBounds(bounds, {
+        padding: { top: 80, bottom: 80, left: 80, right: 80 },
+        pitch,
+        bearing,
+        animate: false
+      });
+
+      await waitForIdle(10000);
+      await waitRaf(2);
+      return true;
+    };
+  </script>
+</body>
+</html>

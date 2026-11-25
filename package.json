@@ -1,0 +1,33 @@
+{
+  "name": "trackreel",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Turn GPX tracks into 3D terrain flyover MP4 videos and instant-loading static share pages",
+  "license": "MIT",
+  "bin": {
+    "trackreel": "./src/render.mjs"
+  },
+  "scripts": {
+    "sample": "node scripts/fetch-sample-gpx.mjs",
+    "render": "node src/render.mjs sample/qixingshan.gpx --out dist --title \"Qixingshan Main & East Peak Traverse\""
+  },
+  "keywords": [
+    "gpx",
+    "3d-terrain",
+    "flyover",
+    "maplibre",
+    "threejs",
+    "ffmpeg",
+    "video",
+    "outdoor",
+    "static-site"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@turf/turf": "^7.2.0",
+    "fast-xml-parser": "^5.0.0",
+    "playwright-core": "^1.50.0"
+  }
+}

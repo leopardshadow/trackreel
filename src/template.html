@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>__PAGE_TITLE__</title>
+  <meta name="description" content="__PAGE_DESC__" />
+  <style>
+    :root {
+      --bg: #090d16;
+      --surface: #111827;
+      --surface-2: #182235;
+      --border: rgba(255, 255, 255, 0.09);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #fc4c02;
+      --accent-soft: rgba(252, 76, 2, 0.16);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: radial-gradient(circle at top, #131c31 0%, var(--bg) 55%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      min-height: 100vh;
+      line-height: 1.5;
+      padding: 24px 16px 48px;
+    }
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 12px;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #ff7a3d;
+      margin-bottom: 6px;
+    }
+    .eyebrow::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+    h1 {
+      font-size: clamp(22px, 4vw, 32px);
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .date-text {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+    }
+    .btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 9px 14px;
+      border-radius: 10px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.15s, border-color 0.15s, transform 0.1s;
+    }
+    .btn:hover {
+      background: var(--surface-2);
+      border-color: rgba(255, 255, 255, 0.22);
+    }
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover {
+      background: #e34400;
+      border-color: #e34400;
+    }
+    .video-card {
+      position: relative;
+      background: #000;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+    }
+    video {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-height: 76vh;
+      background: #000;
+    }
+    .speed-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 16px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .speed-label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .speed-group {
+      display: inline-flex;
+      gap: 6px;
+    }
+    .speed-btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 5px 11px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .speed-btn:hover {
+      color: var(--text);
+      border-color: rgba(255, 255, 255, 0.24);
+    }
+    .speed-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    @media (max-width: 640px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .stat-label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .stat-value {
+      font-size: 24px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
+    }
+    .stat-unit {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-left: 3px;
+    }
+    .elevation-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px 20px 14px;
+    }
+    .elevation-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 10px;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .elevation-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .elevation-live {
+      font-size: 13px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .elevation-live strong {
+      color: #ff7a3d;
+    }
+    .chart-wrap {
+      width: 100%;
+      height: 150px;
+      cursor: pointer;
+      user-select: none;
+    }
+    svg#eleChart {
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+    }
+    footer {
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <header>
+      <div>
+        <div class="eyebrow">trackreel</div>
+        <h1 id="actTitle"></h1>
+        <div id="actDate" class="date-text"></div>
+      </div>
+      <div class="actions">
+        <a class="btn btn-primary" href="flyover.mp4" download>Download MP4</a>
+        <button id="copyBtn" class="btn" type="button">Copy Share Link</button>
+      </div>
+    </header>
+
+    <section class="video-card">
+      <video
+        id="flyoverVideo"
+        src="flyover.mp4"
+        poster="poster.jpg"
+        autoplay
+        muted
+        loop
+        playsinline
+        controls
+        preload="auto"
+      ></video>
+      <div class="speed-bar">
+        <span class="speed-label">Playback Speed</span>
+        <div class="speed-group" role="group" aria-label="Playback Speed">
+          <button class="speed-btn active" type="button" data-rate="1">1x</button>
+          <button class="speed-btn" type="button" data-rate="1.5">1.5x</button>
+          <button class="speed-btn" type="button" data-rate="2">2x</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-label">Distance</span>
+        <span class="stat-value"><span id="statDist">--</span><span class="stat-unit">km</span></span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Elevation Gain</span>
+        <span class="stat-value"><span id="statGain">--</span><span class="stat-unit">m</span></span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Max Elevation</span>
+        <span class="stat-value"><span id="statMaxEle">--</span><span class="stat-unit">m</span></span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Duration</span>
+        <span class="stat-value" id="statDuration">--</span>
+      </div>
+    </section>
+
+    <section class="elevation-card">
+      <div class="elevation-header">
+        <span class="elevation-title">Elevation Profile (click to seek)</span>
+        <span class="elevation-live">Now: <strong id="liveDist">0.00 km</strong> · <strong id="liveEle">-- m</strong></span>
+      </div>
+      <div class="chart-wrap" id="chartWrap">
+        <svg id="eleChart" viewBox="0 0 800 140" preserveAspectRatio="none"></svg>
+      </div>
+    </section>
+
+    <footer>
+      Pre-rendered with trackreel · Static HTML + H.264 MP4
+    </footer>
+  </main>
+
+  <script>
+    const META = __INLINE_META_JSON__;
+
+    document.getElementById('actTitle').textContent = META.title;
+    document.getElementById('actDate').textContent = META.dateFormatted;
+    document.getElementById('statDist').textContent = META.distanceKm.toFixed(2);
+    document.getElementById('statGain').textContent = Math.round(META.elevationGainM).toLocaleString();
+    document.getElementById('statMaxEle').textContent = Math.round(META.maxEleM).toLocaleString();
+    document.getElementById('statDuration').textContent = META.durationFormatted;
+
+    const copyBtn = document.getElementById('copyBtn');
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(window.location.href);
+        copyBtn.textContent = 'Copied Link ✓';
+        setTimeout(() => (copyBtn.textContent = 'Copy Share Link'), 1800);
+      } catch {
+        copyBtn.textContent = 'Copy URL from address bar';
+        setTimeout(() => (copyBtn.textContent = 'Copy Share Link'), 2200);
+      }
+    });
+
+    const profile = META.elevationProfile || [];
+    const svg = document.getElementById('eleChart');
+    const W = 800, H = 140, padTop = 14, padBottom = 18;
+    const minE = profile.length ? Math.min(...profile.map((p) => p.ele)) : 0;
+    const maxE = profile.length ? Math.max(...profile.map((p) => p.ele)) : 100;
+    const spanE = Math.max(10, maxE - minE);
+    const totalKm = Math.max(0.01, META.distanceKm);
+
+    const xOf = (dist) => (dist / totalKm) * W;
+    const yOf = (ele) => H - padBottom - ((ele - minE) / spanE) * (H - padTop - padBottom);
+
+    if (profile.length > 1) {
+      const pts = profile.map((p) => `${xOf(p.dist).toFixed(1)},${yOf(p.ele).toFixed(1)}`).join(' ');
+      const areaPts = `0,${H - padBottom} ${pts} ${W},${H - padBottom}`;
+
+      svg.innerHTML = `
+        <defs>
+          <linearGradient id="eleGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#fc4c02" stop-opacity="0.45" />
+            <stop offset="100%" stop-color="#fc4c02" stop-opacity="0.02" />
+          </linearGradient>
+        </defs>
+        <line x1="0" y1="${H - padBottom}" x2="${W}" y2="${H - padBottom}" stroke="rgba(255,255,255,0.1)" stroke-width="1" />
+        <polygon points="${areaPts}" fill="url(#eleGrad)" />
+        <polyline points="${pts}" fill="none" stroke="#fc4c02" stroke-width="2.5" stroke-linejoin="round" />
+        <line id="cursorLine" x1="0" y1="${padTop}" x2="0" y2="${H - padBottom}" stroke="rgba(255,255,255,0.45)" stroke-width="1.5" stroke-dasharray="3 3" />
+        <circle id="cursorDot" cx="0" cy="${yOf(profile[0].ele)}" r="5.5" fill="#ffffff" stroke="#fc4c02" stroke-width="3" />
+      `;
+    }
+
+    const video = document.getElementById('flyoverVideo');
+    const liveDistEl = document.getElementById('liveDist');
+    const liveEleEl = document.getElementById('liveEle');
+
+    const speedBtns = document.querySelectorAll('.speed-btn');
+    speedBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const rate = Number(btn.dataset.rate) || 1;
+        video.playbackRate = rate;
+        speedBtns.forEach((b) => b.classList.toggle('active', b === btn));
+      });
+    });
+
+    function updateCursor(ratio) {
+      if (!profile.length) return;
+      const clamped = Math.max(0, Math.min(1, ratio));
+      const trackRatio = Math.min(1, clamped / (META.trackFlyRatio || 0.88));
+      const idxFloat = trackRatio * (profile.length - 1);
+      const i0 = Math.floor(idxFloat);
+      const i1 = Math.min(profile.length - 1, i0 + 1);
+      const frac = idxFloat - i0;
+      const dist = profile[i0].dist + (profile[i1].dist - profile[i0].dist) * frac;
+      const ele = profile[i0].ele + (profile[i1].ele - profile[i0].ele) * frac;
+
+      const cx = xOf(dist);
+      const cy = yOf(ele);
+      const line = document.getElementById('cursorLine');
+      const dot = document.getElementById('cursorDot');
+      if (line && dot) {
+        line.setAttribute('x1', cx);
+        line.setAttribute('x2', cx);
+        dot.setAttribute('cx', cx);
+        dot.setAttribute('cy', cy);
+      }
+      liveDistEl.textContent = `${dist.toFixed(2)} km`;
+      liveEleEl.textContent = `${Math.round(ele)} m`;
+    }
+
+    let lastSyncedTime = -1;
+    function syncLoop() {
+      if (video.duration && !Number.isNaN(video.duration) && video.currentTime !== lastSyncedTime) {
+        lastSyncedTime = video.currentTime;
+        updateCursor(video.currentTime / video.duration);
+      }
+      requestAnimationFrame(syncLoop);
+    }
+    requestAnimationFrame(syncLoop);
+
+    document.getElementById('chartWrap').addEventListener('click', (e) => {
+      if (!video.duration) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      video.currentTime = ratio * video.duration * (META.trackFlyRatio || 0.88);
+    });
+  </script>
+</body>
+</html>

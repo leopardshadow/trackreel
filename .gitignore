@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.mp4
+*.webm
+*.jpg
+*.jpeg
+*.png
+*.log
+.DS_Store
+.env
+.env.*

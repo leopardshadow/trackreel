@@ -1,0 +1,606 @@
+#!/usr/bin/env node
+import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import http from 'node:http';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { XMLParser } from 'fast-xml-parser';
+import * as turf from '@turf/turf';
+import { chromium } from 'playwright-core';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const HELP_TEXT = `Usage: trackreel <input.gpx> [options]
+
+Options:
+  --out <dir>              Output directory (default: dist)
+  --title <text>           Activity title shown in video HUD and page header
+  --duration <auto|sec>    Video duration in seconds, or "auto" (default: auto)
+  --fps <num>              Rendered frames per second (default: 30)
+  --width <px>             Video width in pixels, rounded to even (default: 1280)
+  --height <px>            Video height in pixels, rounded to even (default: 720)
+  --exaggeration <num>     3D terrain vertical exaggeration factor (default: 1.4)
+  --interpolate-fps <num>  Optional FFmpeg motion interpolation target FPS (default: 0 / off)
+  --chrome <path>          Explicit path to Chrome/Chromium executable
+  -h, --help               Show this help message
+`;
+
+function detectChromeExecutable() {
+  const candidates = [
+    process.env.CHROME_PATH,
+    // Linux
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    // macOS
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    // Windows
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
+  ].filter(Boolean);
+
+  return candidates.find((p) => existsSync(p)) || null;
+}
+
+function requireArg(argv, i, flag) {
+  if (i + 1 >= argv.length) {
+    throw new Error(`Missing value for ${flag}`);
+  }
+  return argv[i + 1];
+}
+
+function parseArgs(argv) {
+  const opts = {
+    input: null,
+    out: 'dist',
+    duration: 'auto',
+    fps: 30,
+    width: 1280,
+    height: 720,
+    exaggeration: 1.4,
+    title: null,
+    interpolateFps: 0,
+    chromePath: null
+  };
+
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '-h' || arg === '--help') {
+      console.log(HELP_TEXT);
+      process.exit(0);
+    } else if (!arg.startsWith('-') && !opts.input) {
+      opts.input = arg;
+    } else if (arg === '--out') {
+      opts.out = requireArg(argv, i++, arg);
+    } else if (arg === '--duration') {
+      const val = requireArg(argv, i++, arg);
+      opts.duration = val === 'auto' ? 'auto' : Number(val);
+    } else if (arg === '--fps') {
+      opts.fps = Number(requireArg(argv, i++, arg));
+    } else if (arg === '--interpolate-fps') {
+      opts.interpolateFps = Number(requireArg(argv, i++, arg));
+    } else if (arg === '--width') {
+      opts.width = Number(requireArg(argv, i++, arg));
+    } else if (arg === '--height') {
+      opts.height = Number(requireArg(argv, i++, arg));
+    } else if (arg === '--exaggeration') {
+      opts.exaggeration = Number(requireArg(argv, i++, arg));
+    } else if (arg === '--title') {
+      opts.title = requireArg(argv, i++, arg);
+    } else if (arg === '--chrome') {
+      opts.chromePath = requireArg(argv, i++, arg);
+    } else {
+      console.error(`Unknown argument: ${arg}\n`);
+      console.error(HELP_TEXT);
+      process.exit(1);
+    }
+  }
+
+  if (!opts.input) {
+    console.error(HELP_TEXT);
+    process.exit(1);
+  }
+
+  if (!Number.isFinite(opts.width) || opts.width < 2 || !Number.isFinite(opts.height) || opts.height < 2) {
+    throw new Error('--width and --height must be positive numbers >= 2');
+  }
+  if (!Number.isFinite(opts.fps) || opts.fps <= 0) {
+    throw new Error('--fps must be a positive number');
+  }
+  if (!Number.isFinite(opts.exaggeration) || opts.exaggeration < 0) {
+    throw new Error('--exaggeration must be a non-negative number');
+  }
+  if (!Number.isFinite(opts.interpolateFps) || opts.interpolateFps < 0) {
+    throw new Error('--interpolate-fps must be a non-negative number');
+  }
+  if (opts.duration !== 'auto' && (!Number.isFinite(opts.duration) || opts.duration <= 0)) {
+    throw new Error('--duration must be "auto" or a positive number');
+  }
+
+  opts.width = Math.max(2, Math.round(opts.width / 2) * 2);
+  opts.height = Math.max(2, Math.round(opts.height / 2) * 2);
+
+  return opts;
+}
+
+/**
+ * Compute natural video duration from distance + elevation gain using
+ * Naismith-style effort distance and a square-root curve (minimum 15s, no upper cap).
+ */
+function computeAutoDuration(distanceKm, elevationGainM) {
+  const effortKm = Math.max(0.5, distanceKm + elevationGainM / 100);
+  const raw = Math.round(8 + 7.5 * Math.sqrt(effortKm));
+  return Math.max(15, raw);
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function escapeInlineJson(obj) {
+  return JSON.stringify(obj).replaceAll('<', '\\u003c');
+}
+
+function parseGpx(xmlText) {
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: '@_'
+  });
+  const doc = parser.parse(xmlText);
+  const gpx = doc.gpx;
+  if (!gpx) throw new Error('Invalid GPX file: missing <gpx> root');
+
+  const rawTitle =
+    gpx.trk?.name ||
+    (Array.isArray(gpx.trk) ? gpx.trk[0]?.name : null) ||
+    gpx.metadata?.name ||
+    '3D Track Flyover';
+
+  const rawPoints = [];
+  if (gpx.trk) {
+    const trks = Array.isArray(gpx.trk) ? gpx.trk : [gpx.trk];
+    for (const trk of trks) {
+      const segs = Array.isArray(trk.trkseg) ? trk.trkseg : [trk.trkseg];
+      for (const seg of segs) {
+        if (!seg?.trkpt) continue;
+        const pts = Array.isArray(seg.trkpt) ? seg.trkpt : [seg.trkpt];
+        rawPoints.push(...pts);
+      }
+    }
+  } else if (gpx.rte) {
+    const rtes = Array.isArray(gpx.rte) ? gpx.rte : [gpx.rte];
+    for (const rte of rtes) {
+      if (!rte?.rtept) continue;
+      const pts = Array.isArray(rte.rtept) ? rte.rtept : [rte.rtept];
+      rawPoints.push(...pts);
+    }
+  }
+
+  const points = rawPoints
+    .map((p) => {
+      const eleNum = Number(p.ele);
+      return {
+        lat: Number(p['@_lat']),
+        lon: Number(p['@_lon']),
+        ele: p.ele !== undefined && Number.isFinite(eleNum) ? eleNum : 0,
+        time: p.time ? Date.parse(p.time) : null
+      };
+    })
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+
+  if (points.length < 2) {
+    throw new Error('GPX file contains fewer than 2 valid trackpoints');
+  }
+
+  return { title: String(rawTitle).trim(), points };
+}
+
+function formatDuration(seconds) {
+  if (!seconds || seconds <= 0) return '--';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+  return `${m}m`;
+}
+
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function smoothCoords(coords, windowRadius) {
+  const n = coords.length;
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    let lonSum = 0;
+    let latSum = 0;
+    let count = 0;
+    const start = Math.max(0, i - windowRadius);
+    const end = Math.min(n - 1, i + windowRadius);
+    for (let j = start; j <= end; j++) {
+      lonSum += coords[j][0];
+      latSum += coords[j][1];
+      count++;
+    }
+    out[i] = [lonSum / count, latSum / count];
+  }
+  return out;
+}
+
+function buildTrackData(points) {
+  const cumDistKm = [0];
+  let elevationGainM = 0;
+  let elevationLossM = 0;
+  let minEleM = Infinity;
+  let maxEleM = -Infinity;
+
+  for (let i = 0; i < points.length; i++) {
+    const ele = points[i].ele;
+    if (ele < minEleM) minEleM = ele;
+    if (ele > maxEleM) maxEleM = ele;
+    if (i > 0) {
+      const d = turf.distance(
+        [points[i - 1].lon, points[i - 1].lat],
+        [points[i].lon, points[i].lat],
+        { units: 'kilometers' }
+      );
+      cumDistKm.push(cumDistKm[i - 1] + d);
+      const de = ele - points[i - 1].ele;
+      // Filter minor GPS altitude jitter (< 1m per step)
+      if (de > 1.0) elevationGainM += de;
+      else if (de < -1.0) elevationLossM += Math.abs(de);
+    }
+  }
+
+  const totalDistKm = cumDistKm[cumDistKm.length - 1];
+  if (totalDistKm <= 0) {
+    throw new Error('GPX track has zero total distance (all trackpoints are identical)');
+  }
+  const lineCoords = points.map((p) => [p.lon, p.lat]);
+  const line = turf.lineString(lineCoords);
+  const bbox = turf.bbox(line);
+
+  // Resample into 500 evenly spaced points for smooth camera & tube animation
+  const sampleCount = 500;
+  const resampledCoords = [];
+  const resampledEles = [];
+  const resampledDists = [];
+
+  let origIdx = 0;
+  for (let i = 0; i < sampleCount; i++) {
+    const targetDist = (i / (sampleCount - 1)) * totalDistKm;
+    const pt = turf.along(line, targetDist, { units: 'kilometers' });
+    resampledCoords.push(pt.geometry.coordinates);
+    resampledDists.push(targetDist);
+
+    while (origIdx < cumDistKm.length - 2 && cumDistKm[origIdx + 1] < targetDist) {
+      origIdx++;
+    }
+    const segLen = Math.max(1e-9, cumDistKm[origIdx + 1] - cumDistKm[origIdx]);
+    const frac = Math.max(0, Math.min(1, (targetDist - cumDistKm[origIdx]) / segLen));
+    const ele = points[origIdx].ele + (points[origIdx + 1].ele - points[origIdx].ele) * frac;
+    resampledEles.push(ele);
+  }
+
+  // Downsampled elevation profile (~120 points) for lightweight static SVG chart
+  const profileCount = 120;
+  const elevationProfile = [];
+  for (let i = 0; i < profileCount; i++) {
+    const idx = Math.round((i / (profileCount - 1)) * (sampleCount - 1));
+    elevationProfile.push({
+      dist: Number(resampledDists[idx].toFixed(3)),
+      ele: Number(resampledEles[idx].toFixed(1))
+    });
+  }
+
+  const firstTime = points.find((p) => p.time)?.time || Date.now();
+  const lastTime = [...points].reverse().find((p) => p.time)?.time || firstTime;
+  const durationSec = Math.max(0, (lastTime - firstTime) / 1000);
+  const dateFormatted = new Date(firstTime).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
+  return {
+    totalDistKm,
+    elevationGainM,
+    elevationLossM,
+    minEleM,
+    maxEleM,
+    durationSec,
+    durationFormatted: formatDuration(durationSec),
+    dateFormatted,
+    bbox,
+    resampledCoords,
+    resampledEles,
+    resampledDists,
+    elevationProfile
+  };
+}
+
+function buildCameraTimeline(track, totalFrames, trackFlyRatio = 0.88) {
+  const { resampledCoords, resampledEles, resampledDists, totalDistKm, bbox } = track;
+  const n = resampledCoords.length;
+
+  const baseZoom =
+    totalDistKm < 2.5 ? 15.2 : totalDistKm < 6 ? 14.6 : totalDistKm < 15 ? 13.8 : 13.2;
+
+  // Lock camera bearing to the overall start->end axis with a gentle monotonic sweep
+  // so terrain stays rock-solid instead of spinning wildly on switchbacks.
+  const startCoord = resampledCoords[0];
+  const endCoord = resampledCoords[n - 1];
+  const mainBearing = turf.bearing(startCoord, endCoord);
+
+  const smoothCenters = smoothCoords(resampledCoords, Math.round(n * 0.18));
+  const routeCenter = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
+
+  const flyFrames = Math.max(2, Math.floor(totalFrames * trackFlyRatio));
+  const outroFrames = Math.max(1, totalFrames - flyFrames);
+
+  const frames = [];
+  for (let f = 0; f < totalFrames; f++) {
+    if (f < flyFrames) {
+      const linearT = f / (flyFrames - 1);
+      const p = linearT * 0.9 + easeInOutCubic(linearT) * 0.1;
+      const idx = Math.min(n - 1, Math.max(1, Math.round(p * (n - 1))));
+      const lookIdx = Math.min(n - 1, idx + Math.round(n * 0.04));
+      const bearing = mainBearing - 10 + 18 * linearT;
+
+      frames.push({
+        progress: p,
+        distKm: resampledDists[idx],
+        eleM: resampledEles[idx],
+        headCoord: resampledCoords[idx],
+        camera: {
+          center: smoothCenters[lookIdx],
+          zoom: baseZoom,
+          pitch: 62,
+          bearing
+        }
+      });
+    } else {
+      // Smooth outro pull-back revealing the full terrain and complete route
+      const outroT = easeInOutCubic((f - flyFrames + 1) / outroFrames);
+      const endCenter = smoothCenters[n - 1];
+      const endBearing = mainBearing + 8;
+
+      const center = [
+        endCenter[0] + (routeCenter[0] - endCenter[0]) * outroT,
+        endCenter[1] + (routeCenter[1] - endCenter[1]) * outroT
+      ];
+
+      frames.push({
+        progress: 1,
+        distKm: totalDistKm,
+        eleM: resampledEles[n - 1],
+        headCoord: resampledCoords[n - 1],
+        camera: {
+          center,
+          zoom: baseZoom - 1.1 * outroT,
+          pitch: 62 - 8 * outroT,
+          bearing: endBearing + 8 * outroT
+        }
+      });
+    }
+  }
+
+  return frames;
+}
+
+function startStaticServer(htmlContent) {
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(htmlContent);
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      resolve({ server, url: `http://127.0.0.1:${port}/` });
+    });
+  });
+}
+
+async function main() {
+  const opts = parseArgs(process.argv);
+  const inputPath = path.resolve(opts.input);
+  const outDir = path.resolve(opts.out);
+  await fs.mkdir(outDir, { recursive: true });
+
+  const chromePath = opts.chromePath || detectChromeExecutable();
+  if (!chromePath) {
+    throw new Error(
+      'Could not find Chrome/Chromium executable. Pass --chrome <path> or set CHROME_PATH.'
+    );
+  }
+
+  console.log(`Reading GPX: ${inputPath}`);
+  const xmlText = await fs.readFile(inputPath, 'utf-8');
+  const parsed = parseGpx(xmlText);
+  const title = opts.title || parsed.title;
+
+  const track = buildTrackData(parsed.points);
+  const resolvedDuration =
+    opts.duration === 'auto'
+      ? computeAutoDuration(track.totalDistKm, track.elevationGainM)
+      : opts.duration;
+  const effortKm = track.totalDistKm + track.elevationGainM / 100;
+  console.log(
+    `Track "${title}": ${track.totalDistKm.toFixed(2)} km, +${Math.round(track.elevationGainM)} m gain (effort ${effortKm.toFixed(1)} km) -> ${resolvedDuration}s video`
+  );
+
+  const totalFrames = Math.max(2, Math.round(resolvedDuration * opts.fps));
+  const trackFlyRatio = 0.88;
+  const timeline = buildCameraTimeline(track, totalFrames, trackFlyRatio);
+
+  const rendererHtml = await fs.readFile(path.join(__dirname, 'renderer.html'), 'utf-8');
+  const { server, url } = await startStaticServer(rendererHtml);
+
+  let browser;
+  let ffmpeg;
+  try {
+    console.log(`Launching headless Chrome (${opts.width}x${opts.height})...`);
+    browser = await chromium.launch({
+      executablePath: chromePath,
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--use-gl=angle',
+        '--use-angle=swiftshader',
+        '--enable-webgl',
+        '--ignore-gpu-blocklist',
+        `--window-size=${opts.width},${opts.height}`
+      ]
+    });
+
+    const page = await browser.newPage({
+      viewport: { width: opts.width, height: opts.height },
+      deviceScaleFactor: 1
+    });
+
+    page.on('pageerror', (err) => console.error('Page error:', err.message));
+
+    await page.goto(url, { waitUntil: 'networkidle' });
+
+    console.log('Initializing 3D MapLibre terrain & Three.js track...');
+    await page.evaluate(
+      (cfg) => window.initMap(cfg),
+      {
+        title,
+        exaggeration: opts.exaggeration,
+        fullCoords: track.resampledCoords,
+        initialCamera: timeline[0].camera
+      }
+    );
+
+    // 1. Capture 3D overview poster.jpg
+    console.log('Capturing 3D overview poster.jpg...');
+    await page.evaluate(
+      (bbox) =>
+        window.renderOverview([
+          [bbox[0], bbox[1]],
+          [bbox[2], bbox[3]]
+        ]),
+      track.bbox
+    );
+    await page.screenshot({
+      path: path.join(outDir, 'poster.jpg'),
+      type: 'jpeg',
+      quality: 90
+    });
+
+    // 2. Spawn FFmpeg encoder listening on stdin (MJPEG pipe -> H.264 faststart MP4)
+    const mp4Path = path.join(outDir, 'flyover.mp4');
+    const vfArgs =
+      opts.interpolateFps > opts.fps
+        ? ['-vf', `minterpolate=fps=${opts.interpolateFps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1`]
+        : [];
+    ffmpeg = spawn(
+      'ffmpeg',
+      [
+        '-y',
+        '-f', 'image2pipe',
+        '-vcodec', 'mjpeg',
+        '-framerate', String(opts.fps),
+        '-i', '-',
+        ...vfArgs,
+        '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p',
+        '-preset', 'medium',
+        '-crf', '21',
+        '-movflags', '+faststart',
+        mp4Path
+      ],
+      { stdio: ['pipe', 'ignore', 'pipe'] }
+    );
+
+    // Prevent unhandled EPIPE on stdin; ffmpegExit surfaces the actual error
+    ffmpeg.stdin.on('error', () => {});
+
+    let ffmpegStderr = '';
+    ffmpeg.stderr.on('data', (chunk) => {
+      ffmpegStderr += chunk.toString();
+    });
+
+    const ffmpegExit = new Promise((resolve, reject) => {
+      ffmpeg.on('error', reject);
+      ffmpeg.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`FFmpeg exited with code ${code}:\n${ffmpegStderr.slice(-1000)}`));
+      });
+    });
+
+    console.log(`Rendering ${totalFrames} frames (${resolvedDuration}s @ ${opts.fps}fps)...`);
+    const t0 = Date.now();
+    for (let i = 0; i < totalFrames; i++) {
+      const frame = timeline[i];
+      await page.evaluate(
+        (f) => window.renderFrame(f),
+        { ...frame, idleTimeoutMs: i === 0 ? 6000 : 1200 }
+      );
+      const jpegBuf = await page.screenshot({ type: 'jpeg', quality: 90 });
+      const ok = ffmpeg.stdin.write(jpegBuf);
+      if (!ok) {
+        await new Promise((r) => ffmpeg.stdin.once('drain', r));
+      }
+      if ((i + 1) % 10 === 0 || i === totalFrames - 1) {
+        const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+        console.log(`  Frame ${i + 1}/${totalFrames} (${Math.round(((i + 1) / totalFrames) * 100)}%) - ${elapsed}s`);
+      }
+    }
+
+    ffmpeg.stdin.end();
+    await ffmpegExit;
+
+    // 3. Build meta.json and static index.html
+    const meta = {
+      title,
+      dateFormatted: track.dateFormatted,
+      distanceKm: Number(track.totalDistKm.toFixed(2)),
+      elevationGainM: Math.round(track.elevationGainM),
+      elevationLossM: Math.round(track.elevationLossM),
+      minEleM: Math.round(track.minEleM),
+      maxEleM: Math.round(track.maxEleM),
+      durationFormatted: track.durationFormatted,
+      trackFlyRatio,
+      elevationProfile: track.elevationProfile
+    };
+
+    await fs.writeFile(path.join(outDir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf-8');
+
+    const templateHtml = await fs.readFile(path.join(__dirname, 'template.html'), 'utf-8');
+    const desc = `${title} · ${meta.distanceKm} km · +${meta.elevationGainM} m elevation gain · 3D terrain flyover`;
+    const finalHtml = templateHtml
+      .replaceAll('__PAGE_TITLE__', () => escapeHtml(title))
+      .replaceAll('__PAGE_DESC__', () => escapeHtml(desc))
+      .replace('__INLINE_META_JSON__', () => escapeInlineJson(meta));
+
+    await fs.writeFile(path.join(outDir, 'index.html'), finalHtml, 'utf-8');
+
+    const mp4Stat = await fs.stat(mp4Path);
+    console.log(`\nDone! Static share page generated in: ${outDir}`);
+    console.log(`  - index.html`);
+    console.log(`  - flyover.mp4 (${(mp4Stat.size / 1024 / 1024).toFixed(2)} MB)`);
+    console.log(`  - poster.jpg`);
+    console.log(`  - meta.json`);
+  } finally {
+    if (ffmpeg && ffmpeg.exitCode === null) {
+      ffmpeg.kill('SIGTERM');
+    }
+    if (browser) await browser.close();
+    server.close();
+  }
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
