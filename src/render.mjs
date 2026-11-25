@@ -245,6 +245,7 @@ function buildTrackData(points) {
   // while still filtering barometric/GPS altitude jitter.
   const eleThreshold = 3.0;
   let eleAnchor = points[0].ele;
+  const cumGainM = [0];
 
   for (let i = 0; i < points.length; i++) {
     const ele = points[i].ele;
@@ -265,6 +266,7 @@ function buildTrackData(points) {
         elevationLossM += -diff;
         eleAnchor = ele;
       }
+      cumGainM.push(elevationGainM);
     }
   }
 
@@ -276,11 +278,18 @@ function buildTrackData(points) {
   const line = turf.lineString(lineCoords);
   const bbox = turf.bbox(line);
 
+  const firstTimePoint = points.find((p) => p.time !== null && Number.isFinite(p.time));
+  const lastTimePoint = [...points].reverse().find((p) => p.time !== null && Number.isFinite(p.time));
+  const hasTime = Boolean(firstTimePoint && lastTimePoint && lastTimePoint.time > firstTimePoint.time);
+  const startTimeMs = firstTimePoint?.time ?? null;
+
   // Resample into 500 evenly spaced points for smooth camera & tube animation
   const sampleCount = 500;
   const resampledCoords = [];
   const resampledEles = [];
   const resampledDists = [];
+  const resampledGains = [];
+  const resampledElapsedSec = [];
 
   let origIdx = 0;
   for (let i = 0; i < sampleCount; i++) {
@@ -295,7 +304,18 @@ function buildTrackData(points) {
     const segLen = Math.max(1e-9, cumDistKm[origIdx + 1] - cumDistKm[origIdx]);
     const frac = Math.max(0, Math.min(1, (targetDist - cumDistKm[origIdx]) / segLen));
     const ele = points[origIdx].ele + (points[origIdx + 1].ele - points[origIdx].ele) * frac;
+    const gain = cumGainM[origIdx] + (cumGainM[origIdx + 1] - cumGainM[origIdx]) * frac;
     resampledEles.push(ele);
+    resampledGains.push(gain);
+
+    if (hasTime) {
+      const t0 = points[origIdx].time ?? startTimeMs;
+      const t1 = points[origIdx + 1].time ?? t0;
+      const interpMs = t0 + (t1 - t0) * frac;
+      resampledElapsedSec.push(Math.max(0, (interpMs - startTimeMs) / 1000));
+    } else {
+      resampledElapsedSec.push(null);
+    }
   }
 
   // Downsampled elevation profile (~120 points) for lightweight static SVG chart
@@ -309,14 +329,18 @@ function buildTrackData(points) {
     });
   }
 
-  const firstTime = points.find((p) => p.time)?.time || Date.now();
-  const lastTime = [...points].reverse().find((p) => p.time)?.time || firstTime;
+  const firstTime = firstTimePoint?.time || Date.now();
+  const lastTime = lastTimePoint?.time || firstTime;
   const durationSec = Math.max(0, (lastTime - firstTime) / 1000);
-  const dateFormatted = new Date(firstTime).toLocaleDateString('en-US', {
+  const dObj = new Date(firstTime);
+  const dateFormatted = dObj.toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
     day: 'numeric'
   });
+  const dateDot = firstTimePoint
+    ? `${dObj.getUTCFullYear()}.${String(dObj.getUTCMonth() + 1).padStart(2, '0')}.${String(dObj.getUTCDate()).padStart(2, '0')}`
+    : '';
 
   return {
     totalDistKm,
@@ -327,16 +351,31 @@ function buildTrackData(points) {
     durationSec,
     durationFormatted: formatDuration(durationSec),
     dateFormatted,
+    dateDot,
+    hasTime,
     bbox,
     resampledCoords,
     resampledEles,
     resampledDists,
+    resampledGains,
+    resampledElapsedSec,
     elevationProfile
   };
 }
 
 function buildCameraTimeline(track, totalFrames, trackFlyRatio = 0.88) {
-  const { resampledCoords, resampledEles, resampledDists, totalDistKm, bbox } = track;
+  const {
+    resampledCoords,
+    resampledEles,
+    resampledDists,
+    resampledGains,
+    resampledElapsedSec,
+    totalDistKm,
+    elevationGainM,
+    durationSec,
+    hasTime,
+    bbox
+  } = track;
   const n = resampledCoords.length;
 
   const baseZoom =
@@ -378,7 +417,9 @@ function buildCameraTimeline(track, totalFrames, trackFlyRatio = 0.88) {
       frames.push({
         progress: p,
         distKm: resampledDists[idx],
+        gainM: resampledGains[idx],
         eleM: resampledEles[idx],
+        elapsedSec: hasTime ? resampledElapsedSec[idx] : null,
         headCoord: resampledCoords[idx],
         camera: {
           center: smoothCenters[lookIdx],
@@ -401,7 +442,9 @@ function buildCameraTimeline(track, totalFrames, trackFlyRatio = 0.88) {
       frames.push({
         progress: 1,
         distKm: totalDistKm,
+        gainM: elevationGainM,
         eleM: resampledEles[n - 1],
+        elapsedSec: hasTime ? durationSec : null,
         headCoord: resampledCoords[n - 1],
         camera: {
           center,
@@ -496,6 +539,8 @@ async function main() {
       (cfg) => window.initMap(cfg),
       {
         title,
+        dateDot: track.dateDot,
+        hasTime: track.hasTime,
         exaggeration: opts.exaggeration,
         fullCoords: track.resampledCoords,
         initialCamera: timeline[0].camera

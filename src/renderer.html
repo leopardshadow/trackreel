@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>trackreel 3D Renderer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=Noto+Sans+TC:wght@500;700;900&display=swap" rel="stylesheet" />
   <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script src="https://unpkg.com/three@0.149.0/build/three.min.js"></script>
@@ -14,7 +17,7 @@
       height: 100%;
       overflow: hidden;
       background: #0b0f17;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      font-family: "Inter", "Noto Sans TC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     #map {
       width: 100vw;
@@ -24,73 +27,100 @@
     .maplibregl-ctrl-attrib {
       display: none !important;
     }
+    .top-scrim {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 130px;
+      z-index: 8;
+      pointer-events: none;
+      background: linear-gradient(180deg, rgba(6, 10, 18, 0.65) 0%, rgba(6, 10, 18, 0) 100%);
+    }
+    .bottom-scrim {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 110px;
+      z-index: 8;
+      pointer-events: none;
+      background: linear-gradient(0deg, rgba(6, 10, 18, 0.58) 0%, rgba(6, 10, 18, 0) 100%);
+    }
     .hud-top {
       position: fixed;
-      top: 20px;
-      left: 24px;
+      top: 24px;
+      left: 28px;
       z-index: 10;
       pointer-events: none;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      text-shadow: 0 2px 12px rgba(0, 0, 0, 0.85);
+      text-shadow: 0 2px 14px rgba(0, 0, 0, 0.65);
     }
     .hud-title {
-      font-size: 22px;
-      font-weight: 800;
+      font-family: "Noto Sans TC", "Inter", sans-serif;
+      font-size: 28px;
+      font-weight: 700;
       color: #ffffff;
-      letter-spacing: -0.01em;
+      letter-spacing: 0.04em;
+      line-height: 1.15;
     }
-    .hud-bottom {
+    .hud-date {
+      font-size: 13px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.8);
+      letter-spacing: 0.08em;
+      margin-top: 5px;
+    }
+    .hud-glass-bar {
       position: fixed;
-      left: 24px;
-      right: 24px;
-      bottom: 20px;
+      right: 28px;
+      bottom: 36px;
       z-index: 10;
       pointer-events: none;
       display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .hud-stats {
-      display: flex;
-      gap: 12px;
       align-items: center;
+      gap: 16px;
+      background: rgba(10, 14, 22, 0.62);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 14px;
+      padding: 10px 18px;
     }
-    .hud-pill {
-      background: rgba(11, 15, 23, 0.72);
-      backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: 10px;
-      padding: 6px 12px;
-      display: flex;
-      flex-direction: column;
-      min-width: 96px;
+    .hud-divider {
+      width: 1px;
+      height: 26px;
+      background: rgba(255, 255, 255, 0.16);
     }
-    .hud-pill-label {
-      font-size: 10px;
+    .hud-metric-label {
+      font-size: 9.5px;
       color: rgba(255, 255, 255, 0.65);
-      font-weight: 600;
-      letter-spacing: 0.06em;
+      font-weight: 700;
+      letter-spacing: 0.1em;
       text-transform: uppercase;
     }
-    .hud-pill-value {
-      font-size: 18px;
-      font-weight: 800;
+    .hud-metric-value {
+      font-size: 19px;
+      font-weight: 700;
       color: #ffffff;
       font-variant-numeric: tabular-nums;
       line-height: 1.2;
+      margin-top: 2px;
+      white-space: nowrap;
     }
-    .hud-pill-unit {
-      font-size: 11px;
-      font-weight: 600;
-      color: rgba(255, 255, 255, 0.7);
-      margin-left: 3px;
+    .hud-metric-unit {
+      font-size: 11.5px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.72);
+      margin-left: 2px;
     }
     .hud-progress-track {
-      width: 100%;
-      height: 4px;
-      background: rgba(255, 255, 255, 0.22);
+      position: fixed;
+      left: 28px;
+      right: 28px;
+      bottom: 20px;
+      z-index: 10;
+      pointer-events: none;
+      height: 3px;
+      background: rgba(255, 255, 255, 0.24);
       border-radius: 999px;
       overflow: hidden;
     }
@@ -107,25 +137,38 @@
 </head>
 <body>
   <div id="map"></div>
+  <div id="topScrim" class="top-scrim"></div>
+  <div id="bottomScrim" class="bottom-scrim"></div>
 
   <div id="hudTop" class="hud-top">
     <div id="hudTitle" class="hud-title"></div>
+    <div id="hudDate" class="hud-date"></div>
   </div>
 
-  <div id="hudBottom" class="hud-bottom">
-    <div class="hud-stats">
-      <div class="hud-pill">
-        <span class="hud-pill-label">Distance</span>
-        <span class="hud-pill-value"><span id="hudDist">0.00</span><span class="hud-pill-unit">km</span></span>
-      </div>
-      <div class="hud-pill">
-        <span class="hud-pill-label">Elevation</span>
-        <span class="hud-pill-value"><span id="hudEle">0</span><span class="hud-pill-unit">m</span></span>
-      </div>
+  <div id="hudGlassBar" class="hud-glass-bar">
+    <div>
+      <div class="hud-metric-label">Distance</div>
+      <div class="hud-metric-value"><span id="hudDist">0.00</span><span class="hud-metric-unit">km</span></div>
     </div>
-    <div class="hud-progress-track">
-      <div id="hudProgress" class="hud-progress-fill"></div>
+    <div class="hud-divider"></div>
+    <div>
+      <div class="hud-metric-label">Elev Gain</div>
+      <div class="hud-metric-value"><span id="hudGain">0</span><span class="hud-metric-unit">m</span></div>
     </div>
+    <div class="hud-divider"></div>
+    <div>
+      <div class="hud-metric-label">Altitude</div>
+      <div class="hud-metric-value"><span id="hudEle">0</span><span class="hud-metric-unit">m</span></div>
+    </div>
+    <div id="hudTimeDivider" class="hud-divider"></div>
+    <div id="hudTimeCol">
+      <div class="hud-metric-label">Time</div>
+      <div class="hud-metric-value" id="hudTime">0m</div>
+    </div>
+  </div>
+
+  <div id="hudProgressTrack" class="hud-progress-track">
+    <div id="hudProgress" class="hud-progress-fill"></div>
   </div>
 
   <script>
@@ -328,8 +371,36 @@
       map.triggerRepaint();
     }
 
+    function setHudVisible(visible) {
+      const ids = ['topScrim', 'bottomScrim', 'hudTop', 'hudGlassBar', 'hudProgressTrack'];
+      for (const id of ids) {
+        document.getElementById(id).classList.toggle('hud-hidden', !visible);
+      }
+    }
+
+    function formatElapsedHtml(sec) {
+      const s = Math.max(0, Math.floor(sec));
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      if (h > 0) {
+        return `${h}<span class="hud-metric-unit">h</span> ${String(m).padStart(2, '0')}<span class="hud-metric-unit">m</span>`;
+      }
+      return `${m}<span class="hud-metric-unit">m</span>`;
+    }
+
     window.initMap = async function initMap(config) {
       document.getElementById('hudTitle').textContent = config.title || '3D Track Flyover';
+      const dateEl = document.getElementById('hudDate');
+      dateEl.textContent = config.dateDot || '';
+      dateEl.classList.toggle('hud-hidden', !config.dateDot);
+
+      const showTime = Boolean(config.hasTime);
+      document.getElementById('hudTimeDivider').classList.toggle('hud-hidden', !showTime);
+      document.getElementById('hudTimeCol').classList.toggle('hud-hidden', !showTime);
+
+      if (document.fonts && document.fonts.ready) {
+        await document.fonts.ready;
+      }
 
       const style = {
         version: 8,
@@ -426,12 +497,15 @@
     };
 
     window.renderFrame = async function renderFrame(frame) {
-      document.getElementById('hudTop').classList.toggle('hud-hidden', Boolean(frame.hideHud));
-      document.getElementById('hudBottom').classList.toggle('hud-hidden', Boolean(frame.hideHud));
+      setHudVisible(!frame.hideHud);
 
       if (!frame.hideHud) {
         document.getElementById('hudDist').textContent = frame.distKm.toFixed(2);
-        document.getElementById('hudEle').textContent = Math.round(frame.eleM).toString();
+        document.getElementById('hudGain').textContent = Math.round(frame.gainM ?? 0).toLocaleString('en-US');
+        document.getElementById('hudEle').textContent = Math.round(frame.eleM).toLocaleString('en-US');
+        if (typeof frame.elapsedSec === 'number') {
+          document.getElementById('hudTime').innerHTML = formatElapsedHtml(frame.elapsedSec);
+        }
         document.getElementById('hudProgress').style.width = `${(frame.progress * 100).toFixed(2)}%`;
       }
 
@@ -449,8 +523,7 @@
     };
 
     window.renderOverview = async function renderOverview(bounds, bearing = -25, pitch = 58) {
-      document.getElementById('hudTop').classList.add('hud-hidden');
-      document.getElementById('hudBottom').classList.add('hud-hidden');
+      setHudVisible(false);
 
       setTrackProgress(1);
 
