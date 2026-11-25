@@ -241,6 +241,11 @@ function buildTrackData(points) {
   let minEleM = Infinity;
   let maxEleM = -Infinity;
 
+  // Use hysteresis (3m threshold) so high-frequency 1s GPS logs don't lose gradual climbs
+  // while still filtering barometric/GPS altitude jitter.
+  const eleThreshold = 3.0;
+  let eleAnchor = points[0].ele;
+
   for (let i = 0; i < points.length; i++) {
     const ele = points[i].ele;
     if (ele < minEleM) minEleM = ele;
@@ -252,10 +257,14 @@ function buildTrackData(points) {
         { units: 'kilometers' }
       );
       cumDistKm.push(cumDistKm[i - 1] + d);
-      const de = ele - points[i - 1].ele;
-      // Filter minor GPS altitude jitter (< 1m per step)
-      if (de > 1.0) elevationGainM += de;
-      else if (de < -1.0) elevationLossM += Math.abs(de);
+      const diff = ele - eleAnchor;
+      if (diff >= eleThreshold) {
+        elevationGainM += diff;
+        eleAnchor = ele;
+      } else if (diff <= -eleThreshold) {
+        elevationLossM += -diff;
+        eleAnchor = ele;
+      }
     }
   }
 
@@ -333,11 +342,23 @@ function buildCameraTimeline(track, totalFrames, trackFlyRatio = 0.88) {
   const baseZoom =
     totalDistKm < 2.5 ? 15.2 : totalDistKm < 6 ? 14.6 : totalDistKm < 15 ? 13.8 : 13.2;
 
-  // Lock camera bearing to the overall start->end axis with a gentle monotonic sweep
+  // Lock camera bearing to the overall route axis with a gentle monotonic sweep
   // so terrain stays rock-solid instead of spinning wildly on switchbacks.
+  // For out-and-back or loop tracks (where start and end are close), aim toward the farthest point.
   const startCoord = resampledCoords[0];
   const endCoord = resampledCoords[n - 1];
-  const mainBearing = turf.bearing(startCoord, endCoord);
+  let farthestCoord = endCoord;
+  let maxDistFromStart = 0;
+  for (let i = 1; i < n; i++) {
+    const d = turf.distance(startCoord, resampledCoords[i], { units: 'kilometers' });
+    if (d > maxDistFromStart) {
+      maxDistFromStart = d;
+      farthestCoord = resampledCoords[i];
+    }
+  }
+  const startToEndDist = turf.distance(startCoord, endCoord, { units: 'kilometers' });
+  const axisTarget = startToEndDist < maxDistFromStart * 0.4 ? farthestCoord : endCoord;
+  const mainBearing = turf.bearing(startCoord, axisTarget);
 
   const smoothCenters = smoothCoords(resampledCoords, Math.round(n * 0.18));
   const routeCenter = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
