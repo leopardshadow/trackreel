@@ -46,8 +46,27 @@ Options:
   --height <px>            Video height in pixels, rounded to even (default: 720)
   --exaggeration <num>     3D terrain vertical exaggeration factor (default: 1.4)
   --interpolate-fps <num>  Optional FFmpeg motion interpolation target FPS (default: 0 / off)
+  --workers <num>          Parallel headless Chrome workers for frame rendering (default: 1)
+  --cache-dir <dir>        Frame cache directory for resumable rendering (default: <out>/.trackreel-cache)
+  --start-frame <num>      Optional 0-based inclusive start frame for chunked rendering
+  --end-frame <num>        Optional 0-based exclusive end frame for chunked rendering
+  --no-resume              Clear existing frame cache before rendering
+  --keep-frames            Keep cached JPEG frames after encoding MP4
   --chrome <path>          Explicit path to Chrome/Chromium executable
   -h, --help               Show this help message
+```
+
+### Parallel & Resumable Rendering
+
+Frames are written atomically to `<out>/.trackreel-cache/` with a manifest fingerprint. If a long render is interrupted, re-running the same command automatically skips already-rendered frames. You can also speed up CPU rendering with multiple workers or split a long render across separate commands:
+
+```bash
+# Render with 3 parallel headless Chrome workers
+node src/render.mjs track.gpx --out dist --workers 3
+
+# Or render in chunks (final MP4 encodes automatically once all frames exist)
+node src/render.mjs track.gpx --out dist --start-frame 0 --end-frame 250
+node src/render.mjs track.gpx --out dist --start-frame 250 --end-frame 510
 ```
 
 ### Auto Duration Formula

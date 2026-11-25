@@ -1,10 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {
   parseArgs,
   computeAutoDuration,
   escapeHtml,
   escapeInlineJson,
+  frameFilename,
+  computeCacheFingerprint,
+  splitIntoChunks,
+  prepareCacheDir,
   parseGpx,
   buildTrackData,
   buildCameraTimeline
@@ -129,4 +136,52 @@ test('parseArgs validates flags, rounds odd dimensions to even, and rejects miss
   assert.throws(() => parseArgs(['node', 'render.mjs', 'in.gpx', '--out']), /Missing value for --out/);
   assert.throws(() => parseArgs(['node', 'render.mjs', 'in.gpx', '--width', 'abc']), /--width and --height/);
   assert.throws(() => parseArgs(['node', 'render.mjs', 'in.gpx', '--fps', '0']), /--fps/);
+  assert.throws(() => parseArgs(['node', 'render.mjs', 'in.gpx', '--workers', '0']), /--workers/);
+  assert.throws(() => parseArgs(['node', 'render.mjs', 'in.gpx', '--start-frame', '10', '--end-frame', '5']), /--start-frame must be less than --end-frame/);
+
+  const chunkOpts = parseArgs([
+    'node', 'render.mjs', 'in.gpx',
+    '--workers', '3',
+    '--start-frame', '0',
+    '--end-frame', '100',
+    '--no-resume',
+    '--keep-frames'
+  ]);
+  assert.equal(chunkOpts.workers, 3);
+  assert.equal(chunkOpts.startFrame, 0);
+  assert.equal(chunkOpts.endFrame, 100);
+  assert.equal(chunkOpts.resume, false);
+  assert.equal(chunkOpts.keepFrames, true);
 });
+
+test('splitIntoChunks distributes frames evenly across workers', () => {
+  const chunks = splitIntoChunks([0, 1, 2, 3, 4, 5, 6], 3);
+  assert.deepEqual(chunks, [[0, 1, 2], [3, 4], [5, 6]]);
+  assert.deepEqual(splitIntoChunks([10, 11], 5), [[10], [11]]);
+  assert.equal(frameFilename(42), 'frame_000042.jpg');
+});
+
+test('prepareCacheDir resumes matching fingerprint and invalidates stale cache', async () => {
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'trackreel-cache-test-'));
+  try {
+    const fpA = computeCacheFingerprint({ title: 'A', width: 960, totalFrames: 100 });
+    const fpB = computeCacheFingerprint({ title: 'B', width: 960, totalFrames: 100 });
+
+    const first = await prepareCacheDir(tmpRoot, fpA, true);
+    assert.equal(first, false);
+    await fs.writeFile(path.join(tmpRoot, frameFilename(0)), 'fake-jpeg');
+
+    // Same fingerprint with resume=true keeps cached frame
+    const second = await prepareCacheDir(tmpRoot, fpA, true);
+    assert.equal(second, true);
+    assert.equal(await fs.readFile(path.join(tmpRoot, frameFilename(0)), 'utf-8'), 'fake-jpeg');
+
+    // Different fingerprint automatically invalidates stale frames
+    const third = await prepareCacheDir(tmpRoot, fpB, true);
+    assert.equal(third, false);
+    await assert.rejects(() => fs.stat(path.join(tmpRoot, frameFilename(0))));
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
