@@ -2,6 +2,10 @@
 
 Turn any `.gpx` GPS track into a cinematic **3D terrain flyover video (`MP4`)** and an **instant-loading static share page (`HTML`)** — built for hikes, runs, bike rides, and road trips.
 
+![Hehuanshan North Peak 3D Terrain Flyover](docs/demo.webp)
+
+*Sample output (3× sped-up preview): Hehuanshan North Peak, Taiwan — 6.82 km · +554 m elevation gain · max 3,417 m.*
+
 **Design philosophy:** Do all the heavy 3D rendering offline at build time so viewers open a lightweight static page that plays immediately with zero 3D map engine overhead, zero tile API quotas, and full mobile compatibility.
 
 ## Features
